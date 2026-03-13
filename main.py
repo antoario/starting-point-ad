@@ -55,7 +55,7 @@ def load_config(path: str):
 def create_ssh_client(host: str, port: int, username: str, password: str) -> paramiko.SSHClient:
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    print(f"[*] connecting to {username}@{host}:{port}...")
+    print(f"[*] connecting to {username}@{host}:{port}")
     client.connect(
         hostname=host,
         port=port,
@@ -71,7 +71,7 @@ def create_ssh_client(host: str, port: int, username: str, password: str) -> par
 
 def run_remote_command(ssh_client: paramiko.SSHClient, command: str):
     wrapped_cmd = f"bash -lc '{command}'"
-    print(f"[*] running remote command: {wrapped_cmd}...")
+    print(f"[*] running remote command: {wrapped_cmd}")
     _, stdout, stderr = ssh_client.exec_command(wrapped_cmd)
     out = stdout.read().decode().strip()
     err = stderr.read().decode().strip()
@@ -88,7 +88,7 @@ def create_remote_tar(ssh_client: paramiko.SSHClient, remote_dir: str, remote_ta
 
 
 def download_remote_file(ssh_client: paramiko.SSHClient, remote_path: str, local_path: str):
-    print(f"[*] downloading remote file '{remote_path}' to '{local_path}'...")
+    print(f"[*] downloading remote file '{remote_path}' to '{local_path}'")
     with SCPClient(ssh_client.get_transport()) as scp:
         scp.get(remote_path, local_path=local_path)
     print("[+] download completed.")
@@ -105,7 +105,7 @@ def delete_remote_file(ssh_client: paramiko.SSHClient, remote_path: str):
 def extract_tar_into_dir(tar_path: str, target_dir: str):
     if not os.path.exists(tar_path):
         raise FileNotFoundError(f"local tar file '{tar_path}' not found.")
-    print(f"[*] extracting '{tar_path}' into '{target_dir}'...")
+    print(f"[*] extracting '{tar_path}' into '{target_dir}'")
     with tarfile.open(tar_path, "r:gz") as tf:
         tf.extractall(target_dir)
     print("[+] extraction completed.")
@@ -163,7 +163,7 @@ def main():
 
     # discord flow
     try:
-        print("[*] starting Discord bot flow...")
+        print("[*] starting discord bot flow")
         asyncio.run(run_full_flow(local_tar, guild_id))
         print("[+] discord bot flow completed.")
     except Exception as e:

@@ -3,12 +3,12 @@ import tarfile
 import discord
 
 TOKEN = "YOUR_TOKEN_HERE"
-BASE_CATEGORY_NAME = "A/D"
+BASE_CATEGORY_NAME = "a/d channels"
 
 
 def get_directory_names(tar_path: str):
     if not os.path.exists(tar_path):
-        raise FileNotFoundError(f"Tar file '{tar_path}' not found.")
+        raise FileNotFoundError(f"tar file '{tar_path}' not found.")
     with tarfile.open(tar_path, "r:gz") as tf:
         members = tf.getmembers()
     top_level_dirs = set()
@@ -45,13 +45,13 @@ class ad_bot(discord.Client):
     async def setup_ad_category(self):
         guild = self.get_guild(self.guild_id)
         if guild is None:
-            print(f"[ERROR] Guild with ID {self.guild_id} not found or bot is not in that guild.")
+            print(f"[error] guild with id {self.guild_id} not found or bot is not in that guild.")
             return
 
         dir_names = get_directory_names(self.tar_path)
         category_name = find_available_category_name(guild, BASE_CATEGORY_NAME)
 
-        print(f"[*] Creating category '{category_name}' in guild '{guild.name}' ({guild.id})...")
+        print(f"[*] creating category '{category_name}' in guild '{guild.name}' ({guild.id})...")
         category = await guild.create_category(category_name)
         await guild.create_voice_channel("voice", category=category)
         general_channel = await guild.create_text_channel("general", category=category)
@@ -64,16 +64,16 @@ class ad_bot(discord.Client):
 
         if os.path.exists(self.tar_path):
             await general_channel.send(
-                content="Enjoy hacking! 😄",
+                content="enjoy hacking! 😄",
                 file=discord.File(self.tar_path)
             )
         else:
             await general_channel.send(
-                f"Tar file '{self.tar_path}' not found on the bot host."
+                f"tar file '{self.tar_path}' not found on the bot host."
             )
 
     async def on_ready(self):
-        print(f"[+] Bot connected as {self.user}")
+        print(f"[+] bot connected as {self.user}")
         await self.setup_ad_category()
         await self.close()
 

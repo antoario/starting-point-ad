@@ -1,4 +1,4 @@
-# AD-Bot
+# AD Discord Channel Generator
 
 A Python tool that connects to a remote server via SSH, creates a compressed archive of a target directory, downloads it locally, and then automatically sets up a Discord server with a dedicated category and text channels named after the top-level directories found inside the archive.
 
@@ -13,7 +13,7 @@ Built for Attack & Defense CTF competitions.
 3. Downloads the archive locally via SCP
 4. Deletes the remote archive
 5. Connects a Discord bot to your server
-6. Creates an `A/D` category with:
+6. Creates an `a/d channels` category with:
    - A `#general` text channel (the archive is uploaded here)
    - A `voice` voice channel
    - One text channel per top-level directory found in the archive
@@ -77,7 +77,7 @@ guild_id = ...         ; ID of your Discord server (see setup guide below)
 ### 1. Create the Application
 
 1. Go to [discord.com/developers/applications](https://discord.com/developers/applications)
-2. Click **New Application**, give it a name (e.g. `AD-Bot`), and click **Create**
+2. Click **New Application**, give it a name (e.g. `ad-channel-gen`), and click **Create**
 
 ### 2. Create the Bot and Copy the Token
 
@@ -141,7 +141,7 @@ Expected output:
 [*] ssh connection closed.
 [*] starting discord bot flow...
 [+] bot connected as AD-Bot#1234
-[*] creating category 'A/D' in guild 'My Server'
+[*] creating category 'a/d channels' in guild 'My Server'
 [+] discord bot flow completed.
 ```
 
