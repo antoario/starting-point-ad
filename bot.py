@@ -4,8 +4,11 @@ import tarfile
 import asyncio
 import discord
 import re
+import shutil
 
 BASE_CATEGORY_NAME = "a/d channels"
+MAX_RETRIES = 5
+
 
 def get_directory_names(tar_path: str):
     if not os.path.exists(tar_path):
@@ -59,11 +62,25 @@ def resolve_category(guild: discord.Guild, category_hint: str) -> discord.Catego
         if isinstance(cat, discord.CategoryChannel):
             return cat
         return None
-    # name match (case-insensitive)
     for cat in guild.categories:
         if cat.name.lower() == category_hint.lower():
             return cat
     return None
+
+
+async def safe_request(coro, description: str):
+    """Execute a Discord API call, retrying automatically on rate limit (429)."""
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            return await coro
+        except discord.HTTPException as e:
+            if e.status == 429:
+                retry_after = e.retry_after if hasattr(e, "retry_after") else 5.0
+                print(f"[rate limit] {description} — retrying in {retry_after:.1f}s (attempt {attempt}/{MAX_RETRIES})")
+                await asyncio.sleep(retry_after)
+            else:
+                raise
+    raise RuntimeError(f"[error] {description} failed after {MAX_RETRIES} attempts.")
 
 
 class AdBot(discord.Client):
@@ -89,6 +106,7 @@ class AdBot(discord.Client):
             return
 
         dir_names = get_directory_names(self.tar_path)
+        GENERAL_NAMES = {"general", "generale"}
 
         # resolve or create category
         if self.existing_category:
@@ -101,58 +119,107 @@ class AdBot(discord.Client):
             create_defaults = False
         else:
             category_name = find_available_category_name(guild, BASE_CATEGORY_NAME)
-            category = None
+            print(f"[*] creating category '{category_name}' in guild '{guild.name}' ({guild.id})...")
+            category = await safe_request(
+                guild.create_category(category_name),
+                f"create category '{category_name}'"
+            )
+            await safe_request(
+                guild.create_voice_channel("voice", category=category),
+                "create voice channel"
+            )
             create_defaults = True
 
-        GENERAL_NAMES = {"general", "generale"}
-
-
-        if create_defaults:
-            print(f"[*] creating category '{category_name}' in guild '{guild.name}' ({guild.id})...")
-            category = await guild.create_category(category_name)
-
-            await guild.create_voice_channel("voice", category=category)
-
-        # look for an existing general/generale channel in the category
+        # find or create general channel
         general_channel = next(
             (c for c in category.text_channels if c.name in GENERAL_NAMES), None
-        ) if category else None
+        )
 
         if general_channel is None and create_defaults:
-            general_channel = await guild.create_text_channel("general", category=category)
-            await asyncio.sleep(DISCORD_CHANNEL_CREATE_DELAY)
+            general_channel = await safe_request(
+                guild.create_text_channel("general", category=category),
+                "create #general"
+            )
         elif general_channel:
             print(f"[*] using existing channel '#{general_channel.name}' for archive post.")
 
-        # create one channel per top-level directory
+        # --- create one channel per top-level directory ---
         existing_channel_names = {c.name for c in category.channels}
         for name in dir_names:
             safe_name = sanitize_channel_name(name)
-            if not safe_name or safe_name in ("general", "generale", "voice"):
+            if not safe_name or safe_name in GENERAL_NAMES | {"voice"}:
                 continue
             if safe_name in existing_channel_names:
-                print(f"[*] skipping '{safe_name}' — channel already exists.")
+                print(f"[*] skipping '#{safe_name}' — already exists.")
                 continue
-            await guild.create_text_channel(safe_name, category=category)
-            await asyncio.sleep(DISCORD_CHANNEL_CREATE_DELAY)
+            print(f"[*] creating channel '#{safe_name}'...")
+            await safe_request(
+                guild.create_text_channel(safe_name, category=category),
+                f"create #{safe_name}"
+            )
 
-        # post the archive
         if general_channel is None:
-            print("[warning] no 'general' channel found in the category — archive will not be posted.")
+            print("[warning] no 'general' channel found — archive will not be posted.")
             return
 
         if os.path.exists(self.tar_path):
-            file_size_mb = os.path.getsize(self.tar_path) / (1024 * 1024)
-            if file_size_mb > 25:
-                print(f"[warning] tar file is {file_size_mb:.1f} MB — exceeds Discord's 25 MB limit for regular servers.")
-            await general_channel.send(
-                content="enjoy hacking! 😄",
-                file=discord.File(self.tar_path)
-            )
+            await self.upload_file(general_channel)
         else:
-            await general_channel.send(
-                f"tar file '{self.tar_path}' not found on the bot host."
+            await general_channel.send(f"tar file '{self.tar_path}' not found on the bot host.")
+
+    async def upload_file(self, channel: discord.TextChannel):
+        CHUNK_SIZE = 7 * 1024 * 1024
+        file_size = os.path.getsize(self.tar_path)
+        file_size_mb = file_size / (1024 * 1024)
+        print(f"[*] archive size: {file_size_mb:.1f} MB")
+
+        if file_size <= CHUNK_SIZE:
+            print(f"[*] uploading archive to '#{channel.name}'...")
+            await self._send_with_retry(channel, "enjoy hacking! 😄", self.tar_path)
+            print("[+] archive uploaded.")
+        else:
+            tar_name = os.path.basename(self.tar_path)
+            chunk_dir = self.tar_path + "_parts"
+            os.makedirs(chunk_dir, exist_ok=True)
+            chunk_prefix = os.path.join(chunk_dir, tar_name + ".")
+
+            import subprocess
+            subprocess.run(
+                ["split", "-b", str(CHUNK_SIZE), self.tar_path, chunk_prefix],
+                check=True
             )
+
+            chunk_paths = sorted(os.listdir(chunk_dir))
+            total_chunks = len(chunk_paths)
+            print(f"[*] archive split into {total_chunks} parts of 7 MB...")
+
+            await channel.send(
+                f"enjoy hacking! 😄"
+                f"archive split into {total_chunks} parts — reassemble with:"
+                f"```cat {tar_name}.* > {tar_name} && rm {tar_name}.*```"
+            )
+
+            for i, chunk_name in enumerate(chunk_paths, 1):
+                chunk_path = os.path.join(chunk_dir, chunk_name)
+                print(f"[*] uploading part {i}/{total_chunks} ({chunk_name})...")
+                await self._send_with_retry(channel, f"part {i}/{total_chunks}", chunk_path)
+
+            shutil.rmtree(chunk_dir)
+            print("[+] all parts uploaded.")
+
+    async def _send_with_retry(self, channel: discord.TextChannel, content: str, file_path: str):
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                await channel.send(content=content, file=discord.File(file_path))
+                return
+            except discord.HTTPException as e:
+                if e.status == 429:
+                    retry_after = e.retry_after if hasattr(e, "retry_after") else 5.0
+                    print(f"[rate limit] retrying in {retry_after:.1f}s (attempt {attempt}/{MAX_RETRIES})")
+                    await asyncio.sleep(retry_after)
+                else:
+                    raise
+        raise RuntimeError(f"upload failed after {MAX_RETRIES} attempts.")
 
     async def on_ready(self):
         print(f"[+] bot connected as {self.user}")

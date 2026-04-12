@@ -6,7 +6,7 @@ A Python tool for Attack & Defense CTF competitions. It connects to a remote VM 
 
 ## How It Works
 
-1. Connects to the remote machine via SSH (password)
+1. Connects to the remote machine via SSH (password or key-based auth)
 2. Creates a `.tar.gz` archive of all top-level directories in the configured remote path (dotfiles and loose files are excluded)
 3. Downloads the archive locally via SCP and deletes the remote copy
 4. Connects a Discord bot to your server and either creates a new category or reuses an existing one
@@ -18,7 +18,7 @@ A Python tool for Attack & Defense CTF competitions. It connects to a remote VM 
 ## Requirements
 
 - Python 3.10+
-- A Discord account with a server you manage or where you have permissions to  create categories, channels and send messages
+- A Discord account with a server you manage, or where you have permission to create channels, categories and send messages
 - SSH access to the remote machine
 
 Install dependencies:
@@ -54,9 +54,11 @@ Edit `config.ini` before running:
 
 ```ini
 [ssh]
-host = ...
+host = 127.0.0.1
 port = 22
 username = root
+; prefer key-based auth: set key_path and leave AD_SSH_PASSWORD unset
+key_path =
 
 [paths]
 remote_dir = ~/
@@ -75,7 +77,7 @@ category =
 The SSH password and Discord bot token are never stored in `config.ini`. Export them before running:
 
 ```bash
-export AD_SSH_PASSWORD="your-ssh-password"
+export AD_SSH_PASSWORD="your-ssh-password"   # not needed if using key_path
 export AD_DISCORD_TOKEN="your-bot-token"
 ```
 
@@ -95,7 +97,8 @@ export AD_DISCORD_TOKEN="your-bot-token"
 3. Under **TOKEN**, click **Reset Token** then **Copy**
 4. Export it: `export AD_DISCORD_TOKEN="your-token-here"`
 
-> **Warning:** never commit your token or share it. If accidentally exposed, immediately click **Reset Token** on the developer portal.
+>  [!CAUTION]
+> Never commit your token or share it. If accidentally exposed, immediately click **Reset Token** on the developer portal.
 
 ### 3. Enable Privileged Intents
 
@@ -129,9 +132,6 @@ Click **Save Changes**.
 
 # only download the archive, skip Discord entirely
 ./main.py --mode tar
-
-# use a different config file
-./main.py --config /path/to/other.ini
 ```
 
 ### Expected output
@@ -158,12 +158,10 @@ Click **Save Changes**.
 - **Category:** if no `category` is set in `config.ini` and a category named `a/d channels` already exists, the bot creates `a/d channels 2`, `a/d channels 3`, etc. to avoid conflicts.
 - **Existing category:** if `category` is set, only the missing service channels are added — existing ones are skipped.
 - **General channel:** if a channel named `general` or `generale` already exists in the category, it is reused and the archive is uploaded there. A new one is not created.
-- **Archive size:** Discord's file upload limit is 25 MB for standard servers. The bot will warn you if the archive exceeds this before attempting the upload.
+- **Archive size:** Discord's file upload limit is 8 MB for standard servers. If the archive exceeds this, the bot automatically splits it into 7 MB parts and uploads them in sequence. Reassemble with: `cat backup.tar.gz.* > backup.tar.gz && rm backup.tar.gz.*`
 - **Dotfiles:** only top-level directories are archived. Dotfiles (`.bashrc`, `.ssh`, etc.) and loose files in the root are intentionally excluded.
 
 ---
-
-
 
 ## License
 
