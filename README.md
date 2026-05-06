@@ -6,12 +6,13 @@ A Python tool for Attack & Defense CTF competitions. It connects to a remote VM 
 
 ## How It Works
 
-1. Connects to the remote machine via SSH (password or key-based auth)
+1. Connects to the remote machine via SSH (password auth)
 2. Creates a `.tar.gz` archive of all top-level directories in the configured remote path (dotfiles and loose files are excluded)
 3. Downloads the archive locally via SCP and deletes the remote copy
 4. Connects a Discord bot to your server and either creates a new category or reuses an existing one
 5. Creates one text channel per top-level directory found in the archive
 6. Uploads the archive to the `#general` (or `#generale`) channel
+7. Scans every file in the archive for sensitive keywords (`password`, `secret`, `token`, `key`, `credential`, …) and posts each match with its file path and line number to `#general`
 
 ---
 
@@ -54,22 +55,20 @@ Edit `config.ini` before running:
 
 ```ini
 [ssh]
-host = 127.0.0.1
-port = 22
-username = root
-; prefer key-based auth: set key_path and leave AD_SSH_PASSWORD unset
-key_path =
+host=127.0.0.1
+port=22
+username=root
 
 [paths]
-remote_dir = ~/
-remote_tar = ~/backup.tar.gz
-local_tar = backup.tar.gz
+remote_dir=~/
+remote_tar=~/backup.tar.gz
+local_tar=backup.tar.gz
 
 [discord]
-guild_id = ...
+guild_id=...
 ; optional: reuse an existing category by name or numeric ID
 ; leave empty to create a new "a/d channels" category automatically
-category =
+category=
 ```
 
 ### Secrets via environment variables
@@ -77,8 +76,8 @@ category =
 The SSH password and Discord bot token are never stored in `config.ini`. Export them before running:
 
 ```bash
-export AD_SSH_PASSWORD="your-ssh-password"   # not needed if using key_path
-export AD_DISCORD_TOKEN="your-bot-token"
+export AD_SSH_PASSWD="your-ssh-password"
+export AD_DS_TOKEN="your-bot-token"
 ```
 
 ---
@@ -95,7 +94,7 @@ export AD_DISCORD_TOKEN="your-bot-token"
 1. In the left sidebar go to **Bot**
 2. Click **Add Bot** → **Yes, do it!**
 3. Under **TOKEN**, click **Reset Token** then **Copy**
-4. Export it: `export AD_DISCORD_TOKEN="your-token-here"`
+4. Export it: `export AD_DS_TOKEN="your-token-here"`
 
 >  [!CAUTION]
 > Never commit your token or share it. If accidentally exposed, immediately click **Reset Token** on the developer portal.
@@ -127,17 +126,13 @@ Click **Save Changes**.
 ## Running
 
 ```bash
-# full flow: SSH archive + Discord channels
 ./main.py
-
-# only download the archive, skip Discord entirely
-./main.py --mode tar
 ```
 
 ### Expected output
 
 ```
-[*] connecting to user@127.0.0.1:22 (key auth)
+[*] connecting to user@127.0.0.1:22
 [+] ssh connection established.
 [*] running remote command: ...
 [+] remote tar created.
@@ -148,6 +143,10 @@ Click **Save Changes**.
 [*] starting discord bot flow
 [+] bot connected as ad-channel-gen#1234
 [*] creating category 'a/d channels' in guild 'My Server' (123456789)
+[*] uploading archive to '#general'...
+[+] archive uploaded.
+[*] scanning archive for sensitive keywords...
+[*] scan complete: 3 match(es) found.
 [+] discord bot flow completed.
 ```
 
@@ -158,8 +157,8 @@ Click **Save Changes**.
 - **Category:** if no `category` is set in `config.ini` and a category named `a/d channels` already exists, the bot creates `a/d channels 2`, `a/d channels 3`, etc. to avoid conflicts.
 - **Existing category:** if `category` is set, only the missing service channels are added — existing ones are skipped.
 - **General channel:** if a channel named `general` or `generale` already exists in the category, it is reused and the archive is uploaded there. A new one is not created.
-- **Archive size:** Discord's file upload limit is 8 MB for standard servers. If the archive exceeds this, the bot automatically splits it into 7 MB parts and uploads them in sequence. Reassemble with: `cat backup.tar.gz.* > backup.tar.gz && rm backup.tar.gz.*`
 - **Dotfiles:** only top-level directories are archived. Dotfiles (`.bashrc`, `.ssh`, etc.) and loose files in the root are intentionally excluded.
+- **Keyword scan:** after the upload, every file in the archive is scanned for sensitive strings (`password`, `passwd`, `pwd`, `secret`, `token`, `api_key`, `private_key`, `credential`, `key`). Each match is reported in `#general` as `` `path/to/file:42` matched line ``.
 
 ---
 
