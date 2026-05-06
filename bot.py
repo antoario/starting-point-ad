@@ -3,13 +3,23 @@ import tarfile
 import asyncio
 import discord
 import re
-import tempfile
 
 CATEGORY_NAME="a/d channels"
-MAX_RETRIES=5
+MAX_FINDINGS=50
 SENSITIVE_PATTERN=re.compile(
-    r'(password|passwd|pwd|secret|token|api.?key|private.?key|credential|keys|key)',
+    r'(password|passwd|pwd|secret.?key|secret|token|api.?key|private.?key|credential|key)'
+    r'\s*[=:]\s*'
+    r'(?:'
+        r'["\'][^"\']{8,}["\']'
+        r'|'
+        r'[a-zA-Z0-9+/=_\-]{20,}'
+    r')',
     re.IGNORECASE
+)
+SKIP_EXTENSIONS={'.pyc','.pyo','.class','.o','.so','.a','.bin','.exe','.dll'}
+SKIP_DIRS={'__pycache__','.git','node_modules','.tox','.mypy_cache'}
+EXCEPTION_LINE=re.compile(
+    r'^(Traceback \(|  File "|During handling|[A-Za-z]+Error:|[A-Za-z]+Exception:|[A-Za-z]+Warning:|\s+File ".*", line \d+)'
 )
 
 def get_directory_names(tar_path):
@@ -140,64 +150,70 @@ class AdBot(discord.Client):
 
     async def upload_file(self,channel):
         print(f"[*] uploading archive to '#{channel.name}'...")
-        await self._send_with_retry(channel,"enjoy hacking! 😄",self.tar_path)
+        await channel.send(content="enjoy hacking! 😄",file=discord.File(self.tar_path))
         print("[+] archive uploaded.")
         await self.scan_and_report(channel)
 
-    async def scan_and_report(self,channel):
-        print("[*] scanning archive for sensitive keywords...")
+    def _do_scan(self):
         findings=[]
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with tarfile.open(self.tar_path,"r:gz") as tf:
-                tf.extractall(tmpdir)
-            for root,dirs,files in os.walk(tmpdir):
+        total=0
+        scan_dirs=[d for d in get_directory_names(self.tar_path) if os.path.isdir(d)]
+        for scan_dir in scan_dirs:
+            for root,dirs,files in os.walk(scan_dir):
+                dirs[:]=[d for d in dirs if d not in SKIP_DIRS]
                 for fname in files:
+                    if os.path.splitext(fname)[1].lower() in SKIP_EXTENSIONS:
+                        continue
                     fpath=os.path.join(root,fname)
-                    rel=os.path.relpath(fpath,tmpdir)
                     try:
                         with open(fpath,"r",errors="ignore") as f:
                             for lineno,line in enumerate(f,1):
+                                if EXCEPTION_LINE.match(line):
+                                    continue
                                 if SENSITIVE_PATTERN.search(line):
-                                    findings.append(f"`{rel}:{lineno}` {line.strip()}")
+                                    total+=1
+                                    if len(findings)<MAX_FINDINGS:
+                                        findings.append(f"`{fpath}:{lineno}` {line.strip()}")
                     except Exception:
                         continue
+        return findings,total
 
+    async def _send_text(self,channel,content):
+        try:
+            await asyncio.wait_for(channel.send(content),timeout=30.0)
+        except asyncio.TimeoutError:
+            print("[warning] channel.send timed out, skipping chunk.")
+        except Exception as e:
+            print(f"[warning] channel.send failed: {e}")
+
+    async def scan_and_report(self,channel):
+        print("[*] scanning archive for sensitive keywords...")
+        findings,total=await asyncio.to_thread(self._do_scan)
+        print(f"[*] scan complete: {total} match(es) found.")
         if not findings:
-            await channel.send("🔍 no sensitive keywords found in archive.")
-            print("[*] scan complete: nothing found.")
+            await self._send_text(channel,"🔍 no sensitive keywords found in archive.")
             return
 
-        print(f"[*] scan complete: {len(findings)} match(es) found.")
-        header="🔍 **sensitive keywords found in archive:**\n"
+        header=f"🔍 **sensitive keywords found**:\n"
         chunk=header
         for entry in findings:
             line=entry+"\n"
             if len(chunk)+len(line)>1900:
-                await channel.send(chunk)
+                await self._send_text(channel,chunk)
                 chunk=line
             else:
                 chunk+=line
         if chunk:
-            await channel.send(chunk)
-
-    async def _send_with_retry(self,channel,content,file_path):
-        for attempt in range(1,MAX_RETRIES + 1):
-            try:
-                await channel.send(content=content,file=discord.File(file_path))
-                return
-            except discord.HTTPException as e:
-                if e.status==429:
-                    retry_after=e.retry_after if hasattr(e,"retry_after") else 5.0
-                    print(f"[rate limit] retrying in {retry_after:.1f}s (attempt {attempt}/{MAX_RETRIES})")
-                    await asyncio.sleep(retry_after)
-                else:
-                    raise
-        raise RuntimeError(f"upload failed after {MAX_RETRIES} attempts.")
+            await self._send_text(channel,chunk)
 
     async def on_ready(self):
         print(f"[+] bot connected as {self.user}")
-        await self.setup_ad_category()
-        await self.close()
+        try:
+            await self.setup_ad_category()
+        except Exception as e:
+            print(f"[error] setup failed: {e}")
+        finally:
+            await self.close()
 
 
 async def run_full_flow(

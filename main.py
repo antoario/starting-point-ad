@@ -6,6 +6,7 @@ import sys
 import asyncio
 import os
 import shlex
+import tarfile
 from bot import run_full_flow
 
 CONFIG_FILE="config.ini"
@@ -122,6 +123,13 @@ def delete_remote_file(ssh_client,remote_path):
     print("[+] remote tar deleted.")
 
 
+def extract_archive(tar_path):
+    print(f"[*] extracting '{tar_path}' to current directory...")
+    with tarfile.open(tar_path,"r:gz") as tf:
+        tf.extractall(".")
+    print("[+] archive extracted.")
+
+
 def main():
     try:
         host,port,username,password,remote_dir,remote_tar,local_tar,guild_id,token,category=load_config(CONFIG_FILE,ds_flag=True)
@@ -135,6 +143,7 @@ def main():
         create_remote_tar(ssh_client,remote_dir,remote_tar)
         download_remote_file(ssh_client,remote_tar,local_tar)
         delete_remote_file(ssh_client,remote_tar)
+        extract_archive(local_tar)
     except paramiko.AuthenticationException:
         print("[error] ssh authentication failed (check config.ini / env vars).")
         return
