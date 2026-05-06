@@ -1,6 +1,6 @@
-# AD Discord Channel Generator
+# Starting Point AD
 
-A Python tool for Attack & Defense CTF competitions. It connects to a remote VM via SSH, archives the target directory, downloads it locally, and automatically sets up a Discord server with a dedicated category and one channel per service.
+A Python tool for Attack & Defense CTF competitions. It connects to a remote VM via SSH, archives the target directory, downloads it locally, automatically sets up a Discord server with a dedicated category and one channel per service, and scans the archive for sensitive credentials.
 
 ---
 
@@ -12,7 +12,7 @@ A Python tool for Attack & Defense CTF competitions. It connects to a remote VM 
 4. Connects a Discord bot to your server and either creates a new category or reuses an existing one
 5. Creates one text channel per top-level directory found in the archive
 6. Uploads the archive to the `#general` (or `#generale`) channel
-7. Scans every file in the archive for sensitive keywords (`password`, `secret`, `token`, `key`, `credential`, …) and posts each match with its file path and line number to `#general`
+7. Scans every file in the archive for sensitive keywords (`password`, `passwd`, `pwd`, `secret`, `token`, `api_key`, `private_key`, `credential`, `keys`) and posts each match with its file path and line number to `#general`; if nothing is found, posts a "no results" notice instead
 
 ---
 
@@ -87,7 +87,7 @@ export AD_DS_TOKEN="your-bot-token"
 ### 1. Create the Application
 
 1. Go to [discord.com/developers/applications](https://discord.com/developers/applications)
-2. Click **New Application**, give it a name (e.g. `ad-channel-gen`), click **Create**
+2. Click **New Application**, give it a name (e.g. `starting-point-ad`), click **Create**
 
 ### 2. Create the Bot and Copy the Token
 
@@ -141,7 +141,7 @@ Click **Save Changes**.
 [+] remote tar deleted.
 [*] ssh connection closed.
 [*] starting discord bot flow
-[+] bot connected as ad-channel-gen#1234
+[+] bot connected as starting-point-ad#1234
 [*] creating category 'a/d channels' in guild 'My Server' (123456789)
 [*] uploading archive to '#general'...
 [+] archive uploaded.
