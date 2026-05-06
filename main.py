@@ -9,140 +9,145 @@ import shlex
 import tarfile
 from bot import run_full_flow
 
-CONFIG_FILE="config.ini"
+CONFIG_FILE = "config.ini"
 
-def load_config(path,ds_flag):
-    config=configparser.ConfigParser()
-    read_files=config.read(path)
+
+def load_config(path: str, ds_flag: bool) -> tuple:
+    config = configparser.ConfigParser()
+    read_files = config.read(path)
     if not read_files:
         raise FileNotFoundError(f"config file '{path}' not found.")
 
-    sections=("ssh","paths","discord") if ds_flag else ("ssh","paths")
+    sections = ("ssh", "paths", "discord") if ds_flag else ("ssh", "paths")
     for section in sections:
         if section not in config:
             raise ValueError(f"section [{section}] missing in '{path}'.")
 
-    # ssh data and checks
-    ssh_conf=config["ssh"]
-    host=ssh_conf.get("host","").strip()
-    username=ssh_conf.get("username","").strip()
-    port=ssh_conf.get("port","22").strip()
-    password=os.environ.get("AD_SSH_PASSWD","").strip() or None
+    ssh_conf = config["ssh"]
+    host = ssh_conf.get("host", "").strip()
+    username = ssh_conf.get("username", "").strip()
+    port = ssh_conf.get("port", "22").strip()
+    password = os.environ.get("AD_SSH_PASSWD", "").strip() or None
 
     if not host or not username:
         raise ValueError("missing one or more required fields in [ssh]: host,username.")
     if not password:
         raise ValueError("AD_SSH_PASSWD environment variable is not set.")
     try:
-        port=int(port)
+        port = int(port)
     except ValueError:
         raise ValueError("[ssh] port must be an integer.")
 
-    # paths data
-    paths_conf=config["paths"]
-    remote_dir=paths_conf.get("remote_dir","~").strip()
-    remote_tar=paths_conf.get("remote_tar","~/backup.tar.gz").strip()
-    local_tar=paths_conf.get("local_tar","backup.tar.gz").strip()
+    paths_conf = config["paths"]
+    remote_dir = paths_conf.get("remote_dir", "~").strip()
+    remote_tar = paths_conf.get("remote_tar", "~/backup.tar.gz").strip()
+    local_tar = paths_conf.get("local_tar", "backup.tar.gz").strip()
 
-    # discord (only validated when ds_flag=True)
-    guild_id=token=category=None
+    guild_id = token = category = None
     if ds_flag:
-        ds_conf=config["discord"]
-        guild_id_str=ds_conf.get("guild_id","").strip()
-        token=os.environ.get("AD_DS_TOKEN","").strip()
+        ds_conf = config["discord"]
+        guild_id_str = ds_conf.get("guild_id", "").strip()
+        token = os.environ.get("AD_DS_TOKEN", "").strip()
 
         if not guild_id_str:
             raise ValueError("[discord] guild_id is required in config file.")
         if not token:
             raise ValueError("AD_DS_TOKEN environment variable is not set.")
         try:
-            guild_id=int(guild_id_str)
+            guild_id = int(guild_id_str)
         except ValueError:
             raise ValueError("[discord] guild_id must be an integer.")
 
-        category=ds_conf.get("category","").strip() or None
+        category = ds_conf.get("category", "").strip() or None
 
-    return host,port,username,password,remote_dir,remote_tar,local_tar,guild_id,token,category
+    return host, port, username, password, remote_dir, remote_tar, local_tar, guild_id, token, category
 
 
-def create_ssh_client(host,port,username,password):
-    client=paramiko.SSHClient()
+def create_ssh_client(
+    host: str, port: int, username: str, password: str
+) -> paramiko.SSHClient:
+    client = paramiko.SSHClient()
     client.load_system_host_keys()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
-    connect_kwargs=dict(
+    print(f"[*] connecting to {username}@{host}:{port}")
+    client.connect(
         hostname=host,
         port=port,
         username=username,
+        password=password,
         timeout=10,
+        look_for_keys=False,
+        allow_agent=False,
     )
-    print(f"[*] connecting to {username}@{host}:{port}")
-    connect_kwargs["password"]=password
-    connect_kwargs["look_for_keys"]=False
-    connect_kwargs["allow_agent"]=False
-
-    client.connect(**connect_kwargs)
     print("[+] ssh connection established.")
     return client
 
 
-def run_remote_command(ssh_client,command):
-    wrapped_cmd=f"bash -lc {shlex.quote(command)}"
+def run_remote_command(
+    ssh_client: paramiko.SSHClient, command: str
+) -> tuple[str, str]:
+    wrapped_cmd = f"bash -lc {shlex.quote(command)}"
     print(f"[*] running remote command: {wrapped_cmd}")
-    _,stdout,stderr=ssh_client.exec_command(wrapped_cmd)
-    out=stdout.read().decode().strip()
-    err=stderr.read().decode().strip()
-    return out,err
+    _, stdout, stderr = ssh_client.exec_command(wrapped_cmd)
+    out = stdout.read().decode().strip()
+    err = stderr.read().decode().strip()
+    return out, err
 
 
-def create_remote_tar(ssh_client,remote_dir,remote_tar):
-    cmd=(
+def create_remote_tar(
+    ssh_client: paramiko.SSHClient, remote_dir: str, remote_tar: str
+) -> None:
+    cmd = (
         f"cd {remote_dir} && "
         f"find . -maxdepth 1 -mindepth 1 -type d ! -name '.*' -printf '%P\\n' | "
-        f"tar --warning=no-file-changed -czf {remote_tar} -T -"
+        f"tar -czf {remote_tar} -T -"
     )
-    out,err=run_remote_command(ssh_client,cmd)
+    _, err = run_remote_command(ssh_client, cmd)
     if err:
         if "file changed as we read it" not in err:
             raise RuntimeError(f"error creating remote tar: {err}")
     print("[+] remote tar created.")
 
 
-def download_remote_file(ssh_client,remote_path,local_path):
+def download_remote_file(
+    ssh_client: paramiko.SSHClient, remote_path: str, local_path: str
+) -> None:
     print(f"[*] downloading remote file '{remote_path}' to '{local_path}'")
     with SCPClient(ssh_client.get_transport()) as scp:
-        scp.get(remote_path,local_path=local_path)
+        scp.get(remote_path, local_path=local_path)
     print("[+] download completed.")
 
 
-def delete_remote_file(ssh_client,remote_path):
-    cmd=f"rm -f {remote_path}"
-    out,err=run_remote_command(ssh_client,cmd)
+def delete_remote_file(ssh_client: paramiko.SSHClient, remote_path: str) -> None:
+    _, err = run_remote_command(ssh_client, f"rm -f {remote_path}")
     if err:
         raise RuntimeError(f"error deleting remote file: {err}")
     print("[+] remote tar deleted.")
 
 
-def extract_archive(tar_path):
+def extract_archive(tar_path: str) -> None:
     print(f"[*] extracting '{tar_path}' to current directory...")
-    with tarfile.open(tar_path,"r:gz") as tf:
+    with tarfile.open(tar_path, "r:gz") as tf:
         tf.extractall(".")
     print("[+] archive extracted.")
 
 
-def main():
+def main() -> None:
     try:
-        host,port,username,password,remote_dir,remote_tar,local_tar,guild_id,token,category=load_config(CONFIG_FILE,ds_flag=True)
+        host, port, username, password, remote_dir, remote_tar, local_tar, guild_id, token, category = load_config(
+            CONFIG_FILE, ds_flag=True
+        )
     except Exception as e:
         print(f"[error] config error: {e}")
         sys.exit(1)
 
-    ssh_client=None
+    ssh_client = None
     try:
-        ssh_client=create_ssh_client(host,port,username,password)
-        create_remote_tar(ssh_client,remote_dir,remote_tar)
-        download_remote_file(ssh_client,remote_tar,local_tar)
-        delete_remote_file(ssh_client,remote_tar)
+        ssh_client = create_ssh_client(host, port, username, password)
+        create_remote_tar(ssh_client, remote_dir, remote_tar)
+        download_remote_file(ssh_client, remote_tar, local_tar)
+        delete_remote_file(ssh_client, remote_tar)
         extract_archive(local_tar)
     except paramiko.AuthenticationException:
         print("[error] ssh authentication failed (check config.ini / env vars).")
@@ -160,10 +165,11 @@ def main():
 
     try:
         print("[*] starting discord bot flow")
-        asyncio.run(run_full_flow(local_tar,guild_id,token,existing_category=category))
+        asyncio.run(run_full_flow(local_tar, guild_id, token, existing_category=category))
         print("[+] discord bot flow completed.")
     except Exception as e:
         print(f"[error] discord bot flow failed: {e}")
 
-if __name__=="__main__":
+
+if __name__ == "__main__":
     main()
