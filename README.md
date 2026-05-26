@@ -9,10 +9,11 @@ A Python tool for Attack & Defense CTF competitions. It connects to a remote VM 
 1. Connects to the remote machine via SSH (password auth)
 2. Creates a `.tar.gz` archive of all top-level directories in the configured remote path (dotfiles and loose files are excluded)
 3. Downloads the archive locally via SCP and deletes the remote copy
-4. Connects a Discord bot to your server and either creates a new category or reuses an existing one
-5. Creates one text channel per top-level directory found in the archive
-6. Uploads the archive to the `#general` (or `#generale`) channel
-7. Scans every file in the archive for sensitive keywords (`password`, `passwd`, `pwd`, `secret`, `token`, `api_key`, `private_key`, `credential`, `keys`) and posts each match with its file path and line number to `#general`; if nothing is found, posts a "no results" notice instead
+4. Extracts the archive into a local directory (`git_dir`, default: `ad/`), runs `git init` inside it, stages all files and creates an initial commit — giving you a versioned snapshot of the remote services
+5. Connects a Discord bot to your server and either creates a new category or reuses an existing one
+6. Creates one text channel per top-level directory found in the archive
+7. Uploads the archive to the `#general` (or `#generale`) channel
+8. Scans every file in the archive for sensitive keywords (`password`, `passwd`, `pwd`, `secret`, `token`, `api_key`, `private_key`, `credential`, `keys`) and posts each match with its file path and line number to `#general`; if nothing is found, posts a "no results" notice instead
 
 ---
 
@@ -63,6 +64,7 @@ username=root
 remote_dir=~/
 remote_tar=~/backup.tar.gz
 local_tar=backup.tar.gz
+git_dir=ad
 
 [discord]
 guild_id=...
@@ -76,7 +78,7 @@ category=
 The SSH password and Discord bot token are never stored in `config.ini`. Export them before running:
 
 ```bash
-export AD_SSH_PASSWD="your-ssh-password"
+export q="your-ssh-password"
 export AD_DS_TOKEN="your-bot-token"
 ```
 
@@ -140,6 +142,8 @@ Click **Save Changes**.
 [+] download completed.
 [+] remote tar deleted.
 [*] ssh connection closed.
+[*] initializing git repo in 'ad'...
+[+] git repo initialized and initial snapshot committed.
 [*] starting discord bot flow
 [+] bot connected as starting-point-ad#1234
 [*] creating category 'a/d channels' in guild 'My Server' (123456789)

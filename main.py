@@ -6,6 +6,7 @@ import sys
 import asyncio
 import os
 import shlex
+import subprocess
 import tarfile
 from bot import run_full_flow
 
@@ -42,6 +43,7 @@ def load_config(path: str, ds_flag: bool) -> tuple:
     remote_dir = paths_conf.get("remote_dir", "~").strip()
     remote_tar = paths_conf.get("remote_tar", "~/backup.tar.gz").strip()
     local_tar = paths_conf.get("local_tar", "backup.tar.gz").strip()
+    git_dir = paths_conf.get("git_dir", "ad").strip() or "ad"
 
     guild_id = token = category = None
     if ds_flag:
@@ -60,7 +62,7 @@ def load_config(path: str, ds_flag: bool) -> tuple:
 
         category = ds_conf.get("category", "").strip() or None
 
-    return host, port, username, password, remote_dir, remote_tar, local_tar, guild_id, token, category
+    return host, port, username, password, remote_dir, remote_tar, local_tar, git_dir, guild_id, token, category
 
 
 def create_ssh_client(
@@ -126,16 +128,25 @@ def delete_remote_file(ssh_client: paramiko.SSHClient, remote_path: str) -> None
     print("[+] remote tar deleted.")
 
 
-def extract_archive(tar_path: str) -> None:
-    print(f"[*] extracting '{tar_path}' to current directory...")
+def extract_archive(tar_path: str, dest_dir: str = ".") -> None:
+    print(f"[*] extracting '{tar_path}' to '{dest_dir}'...")
+    os.makedirs(dest_dir, exist_ok=True)
     with tarfile.open(tar_path, "r:gz") as tf:
-        tf.extractall(".")
+        tf.extractall(dest_dir)
     print("[+] archive extracted.")
+
+
+def git_init(git_dir: str) -> None:
+    print(f"[*] initializing git repo in '{git_dir}'...")
+    subprocess.run(["git", "init"], cwd=git_dir, check=True, capture_output=True)
+    subprocess.run(["git", "add", "-A"], cwd=git_dir, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "initial snapshot"], cwd=git_dir, check=True, capture_output=True)
+    print("[+] git repo initialized and initial snapshot committed.")
 
 
 def main() -> None:
     try:
-        host, port, username, password, remote_dir, remote_tar, local_tar, guild_id, token, category = load_config(
+        host, port, username, password, remote_dir, remote_tar, local_tar, git_dir, guild_id, token, category = load_config(
             CONFIG_FILE, ds_flag=True
         )
     except Exception as e:
@@ -148,7 +159,8 @@ def main() -> None:
         create_remote_tar(ssh_client, remote_dir, remote_tar)
         download_remote_file(ssh_client, remote_tar, local_tar)
         delete_remote_file(ssh_client, remote_tar)
-        extract_archive(local_tar)
+        extract_archive(local_tar, git_dir)
+        git_init(git_dir)
     except paramiko.AuthenticationException:
         print("[error] ssh authentication failed (check config.ini / env vars).")
         return
