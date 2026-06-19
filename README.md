@@ -78,7 +78,7 @@ category=
 The SSH password and Discord bot token are never stored in `config.ini`. Export them before running:
 
 ```bash
-export q="your-ssh-password"
+export AD_SSH_PASSWD="your-ssh-password"
 export AD_DS_TOKEN="your-bot-token"
 ```
 
