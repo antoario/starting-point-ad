@@ -1,33 +1,41 @@
 #!/usr/bin/env python3
 import configparser
-import paramiko
-from scp import SCPClient
 import sys
 import asyncio
 import os
-import shlex
-import subprocess
-import tarfile
-from bot import run_full_flow
+
+from ssh_client import SSHClientWrapper
+from modules.remote_tasks import RemoteTarCreatorTask, SCPDownloadTask, RemoteCleanupTask
+from modules.git import TarExtractorTask, GitInitializerTask
+from modules.discord import (
+    DiscordConnectionManager,
+    DiscordCategorySetupTask,
+    DiscordChannelsSetupTask,
+    DiscordArchiveUploaderTask,
+    get_directory_names,
+)
+from modules.scan import CredentialScannerTask, DiscordReportSenderTask
 
 CONFIG_FILE = "config.ini"
 
 
-def load_config(path: str, ds_flag: bool) -> tuple:
+def load_config(path: str) -> tuple:
     config = configparser.ConfigParser()
     read_files = config.read(path)
     if not read_files:
         raise FileNotFoundError(f"config file '{path}' not found.")
 
-    sections = ("ssh", "paths", "discord") if ds_flag else ("ssh", "paths")
-    for section in sections:
+    for section in ("ssh", "git", "discord"):
         if section not in config:
             raise ValueError(f"section [{section}] missing in '{path}'.")
 
+    # [ssh]
     ssh_conf = config["ssh"]
     host = ssh_conf.get("host", "").strip()
     username = ssh_conf.get("username", "").strip()
     port = ssh_conf.get("port", "22").strip()
+    remote_dir = ssh_conf.get("remote_dir", "~").strip()
+    remote_tar = ssh_conf.get("remote_tar", "~/backup.tar.gz").strip()
     password = os.environ.get("AD_SSH_PASSWD", "").strip() or None
 
     if not host or not username:
@@ -39,148 +47,118 @@ def load_config(path: str, ds_flag: bool) -> tuple:
     except ValueError:
         raise ValueError("[ssh] port must be an integer.")
 
-    paths_conf = config["paths"]
-    remote_dir = paths_conf.get("remote_dir", "~").strip()
-    remote_tar = paths_conf.get("remote_tar", "~/backup.tar.gz").strip()
-    local_tar = paths_conf.get("local_tar", "backup.tar.gz").strip()
-    git_dir = paths_conf.get("git_dir", "ad").strip() or "ad"
+    # [git]
+    git_conf = config["git"]
+    local_tar = git_conf.get("local_tar", "backup.tar.gz").strip()
+    git_dir = git_conf.get("git_dir", "ad").strip() or "ad"
 
-    guild_id = token = category = None
-    if ds_flag:
-        ds_conf = config["discord"]
-        guild_id_str = ds_conf.get("guild_id", "").strip()
-        token = os.environ.get("AD_DS_TOKEN", "").strip()
+    # [discord]
+    ds_conf = config["discord"]
+    guild_id_str = ds_conf.get("guild_id", "").strip()
+    category = ds_conf.get("category", "").strip() or None
+    token = os.environ.get("AD_DS_TOKEN", "").strip()
 
-        if not guild_id_str:
-            raise ValueError("[discord] guild_id is required in config file.")
-        if not token:
-            raise ValueError("AD_DS_TOKEN environment variable is not set.")
-        try:
-            guild_id = int(guild_id_str)
-        except ValueError:
-            raise ValueError("[discord] guild_id must be an integer.")
-
-        category = ds_conf.get("category", "").strip() or None
+    if not guild_id_str:
+        raise ValueError("[discord] guild_id is required in config file.")
+    if not token:
+        raise ValueError("AD_DS_TOKEN environment variable is not set.")
+    try:
+        guild_id = int(guild_id_str)
+    except ValueError:
+        raise ValueError("[discord] guild_id must be an integer.")
 
     return host, port, username, password, remote_dir, remote_tar, local_tar, git_dir, guild_id, token, category
 
 
-def create_ssh_client(
-    host: str, port: int, username: str, password: str
-) -> paramiko.SSHClient:
-    client = paramiko.SSHClient()
-    client.load_system_host_keys()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-
-    print(f"[*] connecting to {username}@{host}:{port}")
-    client.connect(
-        hostname=host,
-        port=port,
-        username=username,
-        password=password,
-        timeout=10,
-        look_for_keys=False,
-        allow_agent=False,
-    )
-    print("[+] ssh connection established.")
-    return client
-
-
-def run_remote_command(
-    ssh_client: paramiko.SSHClient, command: str
-) -> tuple[str, str]:
-    wrapped_cmd = f"bash -lc {shlex.quote(command)}"
-    print(f"[*] running remote command: {wrapped_cmd}")
-    _, stdout, stderr = ssh_client.exec_command(wrapped_cmd)
-    out = stdout.read().decode().strip()
-    err = stderr.read().decode().strip()
-    return out, err
-
-
-def create_remote_tar(
-    ssh_client: paramiko.SSHClient, remote_dir: str, remote_tar: str
-) -> None:
-    cmd = (
-        f"cd {remote_dir} && "
-        f"find . -maxdepth 1 -mindepth 1 -type d ! -name '.*' -printf '%P\\n' | "
-        f"tar -czf {remote_tar} -T -"
-    )
-    _, err = run_remote_command(ssh_client, cmd)
-    if err:
-        if "file changed as we read it" not in err:
-            raise RuntimeError(f"error creating remote tar: {err}")
-    print("[+] remote tar created.")
-
-
-def download_remote_file(
-    ssh_client: paramiko.SSHClient, remote_path: str, local_path: str
-) -> None:
-    print(f"[*] downloading remote file '{remote_path}' to '{local_path}'")
-    with SCPClient(ssh_client.get_transport()) as scp:
-        scp.get(remote_path, local_path=local_path)
-    print("[+] download completed.")
-
-
-def delete_remote_file(ssh_client: paramiko.SSHClient, remote_path: str) -> None:
-    _, err = run_remote_command(ssh_client, f"rm -f {remote_path}")
-    if err:
-        raise RuntimeError(f"error deleting remote file: {err}")
-    print("[+] remote tar deleted.")
-
-
-def extract_archive(tar_path: str, dest_dir: str = ".") -> None:
-    print(f"[*] extracting '{tar_path}' to '{dest_dir}'...")
-    os.makedirs(dest_dir, exist_ok=True)
-    with tarfile.open(tar_path, "r:gz") as tf:
-        tf.extractall(dest_dir)
-    print("[+] archive extracted.")
-
-
-def git_init(git_dir: str) -> None:
-    print(f"[*] initializing git repo in '{git_dir}'...")
-    subprocess.run(["git", "init"], cwd=git_dir, check=True, capture_output=True)
-    subprocess.run(["git", "add", "-A"], cwd=git_dir, check=True, capture_output=True)
-    subprocess.run(["git", "commit", "-m", "initial snapshot"], cwd=git_dir, check=True, capture_output=True)
-    print("[+] git repo initialized and initial snapshot committed.")
-
-
-def main() -> None:
+async def async_main() -> None:
     try:
         host, port, username, password, remote_dir, remote_tar, local_tar, git_dir, guild_id, token, category = load_config(
-            CONFIG_FILE, ds_flag=True
+            CONFIG_FILE
         )
     except Exception as e:
         print(f"[error] config error: {e}")
         sys.exit(1)
 
-    ssh_client = None
-    try:
-        ssh_client = create_ssh_client(host, port, username, password)
-        create_remote_tar(ssh_client, remote_dir, remote_tar)
-        download_remote_file(ssh_client, remote_tar, local_tar)
-        delete_remote_file(ssh_client, remote_tar)
-        extract_archive(local_tar, git_dir)
-        git_init(git_dir)
-    except paramiko.AuthenticationException:
-        print("[error] ssh authentication failed (check config.ini / env vars).")
-        return
-    except paramiko.SSHException as e:
-        print(f"[error] ssh connection problem: {e}")
-        return
-    except Exception as e:
-        print(f"[error] unexpected error during SSH/tar/scp: {e}")
-        return
-    finally:
-        if ssh_client is not None:
-            ssh_client.close()
-            print("[*] ssh connection closed.")
+    # 1. Instantiate Discord Connection Manager and start connection in background
+    discord_manager = DiscordConnectionManager(token, guild_id)
+    discord_connect_task = asyncio.create_task(discord_manager.start())
 
     try:
-        print("[*] starting discord bot flow")
-        asyncio.run(run_full_flow(local_tar, guild_id, token, existing_category=category))
-        print("[+] discord bot flow completed.")
+        # 2. Start SSH connection and download pipeline
+        ssh_client = SSHClientWrapper(host, port, username, password)
+        
+        async def run_ssh_flow():
+            try:
+                await asyncio.to_thread(ssh_client.connect)
+                
+                # Remote archiving tasks
+                tar_task = RemoteTarCreatorTask(ssh_client, remote_dir, remote_tar)
+                download_task = SCPDownloadTask(ssh_client, remote_tar, local_tar)
+                cleanup_task = RemoteCleanupTask(ssh_client, remote_tar)
+
+                await tar_task.run()
+                await download_task.run()
+                await cleanup_task.run()
+            finally:
+                ssh_client.close()
+
+        ssh_task = asyncio.create_task(run_ssh_flow())
+
+        # Wait for SSH download task to finish and Discord connection to be established
+        await ssh_task
+        await discord_manager.wait_until_ready()
+
+        # 3. Git extraction & commit AND Discord channel setup in parallel
+        service_dirs = get_directory_names(local_tar)
+
+        git_extractor = TarExtractorTask(local_tar, git_dir)
+        git_initializer = GitInitializerTask(git_dir)
+
+        async def run_git_flow():
+            await git_extractor.run()
+            await git_initializer.run()
+
+        discord_category_setup = DiscordCategorySetupTask(discord_manager, category)
+        discord_channels_setup = DiscordChannelsSetupTask(discord_manager, service_dirs)
+        discord_archive_uploader = DiscordArchiveUploaderTask(discord_manager, local_tar)
+
+        async def run_discord_setup_flow():
+            await discord_category_setup.run()
+            await discord_channels_setup.run()
+            await discord_archive_uploader.run()
+
+        git_task = asyncio.create_task(run_git_flow())
+        discord_setup_task = asyncio.create_task(run_discord_setup_flow())
+
+        await asyncio.gather(git_task, discord_setup_task)
+
+        # 4. Scanner and Report
+        print("[*] starting credential scanning flow...")
+        scanner_task = CredentialScannerTask(git_dir, local_tar)
+        await scanner_task.run()
+
+        report_task = DiscordReportSenderTask(discord_manager, scanner_task.findings, scanner_task.total)
+        await report_task.run()
+
+        print("[+] pipeline execution completed successfully.")
+
     except Exception as e:
-        print(f"[error] discord bot flow failed: {e}")
+        print(f"[error] pipeline execution failed: {e}")
+    finally:
+        # 5. Safe disposal of Discord client connection
+        await discord_manager.close()
+        try:
+            await discord_connect_task
+        except Exception:
+            pass
+
+
+def main() -> None:
+    try:
+        asyncio.run(async_main())
+    except KeyboardInterrupt:
+        print("\n[info] process interrupted by user.")
+        sys.exit(0)
 
 
 if __name__ == "__main__":
